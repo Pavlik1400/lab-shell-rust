@@ -137,6 +137,8 @@ name = "lab3-myshell"
 version = "0.1.0"
 dependencies = [
  "argparse",
+ "libc",
+ "nix",
  "rustyline",
 ]
 

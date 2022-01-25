@@ -1,9 +1,17 @@
 mod preprocessing;
 
+use nix::libc::strerror;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::env;
 use std::{collections::HashMap, process};
+
+#[derive(Clone)]
+enum CommandType {
+    Internal,
+    External,
+    LocalVar
+}
 
 pub struct MyShell {
     time_to_exit: bool,
@@ -12,6 +20,13 @@ pub struct MyShell {
     pub exec_path: String,
     pub last_exit_code: i32,
     special_symbols: Vec<char>,
+}
+
+pub struct pipeline<'a> {
+    steps: Vec<Vec<&'a str>>,
+    ioe_descriptors: Vec<(i32, i32, i32)>,
+    types: Vec<CommandType>,
+    subshell_comm: Vec<HashMap<usize, Vec<(usize, usize)>>>
 }
 
 impl MyShell {
@@ -129,11 +144,29 @@ impl MyShell {
         let line = match MyShell::split_command(line) {
             Ok(splitted) => splitted,
             Err(err) => {
-                eprintln!("{}", err);
+                eprintln!("myshell: Error: {}", err);
                 return 1;
             }
         };
         println!("After split:                  {:?}", line);
+
+        let line = match MyShell::preprocess_pipeline(line) {
+            Ok(l) => l,
+            Err(err) => {
+                let err: i32 = err.parse().unwrap();
+                unsafe {eprintln!("myshell: Error: {:?}", strerror(err));}
+                return 1;
+            }
+        };
+        
+        let line = match MyShell::preprocess_subshells(line) {
+            Ok(l) => l,
+            Err(err) => {
+                eprint!("myshell: Error: {}", err);
+                return 1;
+            }
+        };
+
 
         return 0;
     }

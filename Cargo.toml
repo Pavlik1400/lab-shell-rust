@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 argparse = "0.2.2"
 rustyline = "9.1.0"
+nix = "0.23.1"
+libc = "0.2"

@@ -1,3 +1,6 @@
+extern crate libc;
+extern crate nix;
+
 extern crate argparse;
 use argparse::{ArgumentParser, Store, StoreTrue};
 use std::process;
