@@ -4,8 +4,7 @@ use super::{CommandType, MyShell, Pipeline, REDIRECTIONS, REDIRECTION_KEYS};
 use crate::string_utils::{find_all_start_end_symb, find_all_subshells};
 
 use glob::glob;
-use libc::close;
-use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+use nix::libc::{close, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd::pipe;
 use std::fs::File;
 use std::os::unix::io::IntoRawFd;
@@ -53,7 +52,7 @@ impl MyShell {
     }
 
     pub fn preprocess_pipeline(commands: Vec<String>) -> Result<Pipeline, String> {
-        let n_steps = commands.iter().filter(|&command| *command == "|").count();
+        let n_steps = commands.iter().filter(|&command| *command == "|").count() + 1;
         if n_steps == 1 {
             let mut subshell_comm: Vec<HashMap<usize, Vec<(usize, usize)>>> = Vec::new();
             subshell_comm.push(HashMap::new());
@@ -80,6 +79,7 @@ impl MyShell {
         for command in &commands {
             if *command == "|" {
                 steps.push(Vec::new());
+                continue;
             }
             let last_step_len = steps.len();
             steps[last_step_len - 1].push((*command).clone());
@@ -95,7 +95,7 @@ impl MyShell {
                 };
             }
             if i == 0 {
-                ioe_descriptors.push([STDIN_FILENO, pfds.0, STDERR_FILENO]);
+                ioe_descriptors.push([STDIN_FILENO, pfds.1, STDERR_FILENO]);
             } else if i == n_steps - 1 {
                 ioe_descriptors.push([pfds_prev.0, STDOUT_FILENO, STDERR_FILENO]);
             } else {
@@ -163,7 +163,13 @@ impl MyShell {
                     for &index in io_indecies {
                         let old_desc = p.ioe_descriptors[step_i][index as usize];
                         if old_desc > 2 {
-                            unsafe { close(old_desc) };
+                            unsafe {
+                                if close(old_desc) == -1 {
+                                    return Err(
+                                        "file descriptor close was unsuccsessful".to_string()
+                                    );
+                                }
+                            };
                         }
                         p.ioe_descriptors[step_i][index as usize] = fd;
                     }
@@ -179,6 +185,13 @@ impl MyShell {
         }
 
         Ok(p)
+    }
+
+    pub fn substitute_vars_rem_parenth(
+        &self,
+        command: Result<Vec<String>, String>,
+    ) -> Result<Vec<String>, String> {
+        unimplemented!(); // TODO: implement
     }
 
     pub fn expand_globs(command: Result<Vec<String>, String>) -> Result<Vec<String>, String> {
@@ -215,6 +228,27 @@ impl MyShell {
             command.insert(0, "myshell".to_string());
         }
         Ok(command)
+    }
+
+    pub fn substitute_aliases(
+        &self,
+        command: Result<Vec<String>, String>,
+    ) -> Result<Vec<String>, String> {
+        unimplemented!(); // TODO: implement
+    }
+
+    pub fn mark_command_types(&self, mut p: Pipeline) -> Pipeline {
+        for i in 0..p.steps.len() {
+            let command = &p.steps[i];
+            p.types[i] = if self.internal_cmds.contains_key(command[0].as_str()) {
+                CommandType::Internal
+            } else if command.len() == 1 && command[0].contains('=') {
+                CommandType::LocalVar
+            } else {
+                CommandType::External
+            }
+        }
+        p
     }
 
     // pub fn substitute_vars_rem_parenth(command: Vec<&str>) -> Vec<&str> {

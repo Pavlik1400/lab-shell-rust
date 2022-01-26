@@ -1,13 +1,18 @@
+mod mcommands;
 mod preprocessing;
 
 use lazy_static::lazy_static;
-use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::libc::strerror;
+use nix::errno::errno;
+use nix::libc::{close, strerror, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::env;
+use std::os::unix::prelude::FromRawFd;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::{collections::HashMap, process};
 
+type McommandT = dyn Fn(&Vec<String>, [i32; 3]) -> i32;
 lazy_static! {
     pub static ref REDIRECTION_KEYS: Vec<&'static str> = vec!["2>", "&>", ">&", "<", ">"];
     pub static ref REDIRECTIONS: HashMap<&'static str, Vec<i32>> = {
@@ -21,7 +26,7 @@ lazy_static! {
     };
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 enum CommandType {
     Internal,
     External,
@@ -35,6 +40,7 @@ pub struct MyShell {
     pub exec_path: String,
     pub last_exit_code: i32,
     special_symbols: Vec<char>,
+    internal_cmds: HashMap<&'static str, Box<McommandT>>,
 }
 
 pub struct Pipeline {
@@ -64,6 +70,16 @@ impl MyShell {
         let last_exit_code = 0;
         let special_symbols = vec!['$', ' ', '\'', '"'];
 
+        let mut internal_cmds: HashMap<&'static str, Box<McommandT>> = HashMap::new();
+        internal_cmds.insert("merrno", Box::new(MyShell::merrno));
+        internal_cmds.insert("mpwd", Box::new(MyShell::mpwd));
+        internal_cmds.insert("mcd", Box::new(MyShell::mcd));
+        internal_cmds.insert(".", Box::new(MyShell::execute_script));
+        internal_cmds.insert("mecho", Box::new(MyShell::mecho));
+        internal_cmds.insert("mexport", Box::new(MyShell::mexport));
+        internal_cmds.insert("alias", Box::new(MyShell::alias));
+        internal_cmds.insert("mexit", Box::new(MyShell::mexit));
+
         // add exec_path to path if needed
         match env::var("PATH") {
             Ok(val) => {
@@ -83,6 +99,7 @@ impl MyShell {
             exec_path,
             last_exit_code,
             special_symbols,
+            internal_cmds,
         }
     }
 
@@ -195,6 +212,7 @@ impl MyShell {
         }
 
         for i in 0..line.steps.len() {
+            // TODO: add variable substitution & subshell search
             line.steps[i] =
                 match MyShell::insert_myshell(MyShell::expand_globs(Ok(line.steps[i].clone()))) {
                     Ok(val) => val,
@@ -204,6 +222,7 @@ impl MyShell {
                     }
                 }
         }
+        let line = self.mark_command_types(line);
         self.execute_pipeline(line)
     }
 
@@ -215,14 +234,147 @@ impl MyShell {
                 return 1;
             }
         };
-        let path: Vec<&str> = path.split(":").collect();
+        let mut path: Vec<&str> = path.split(":").collect();
         path.push("");
-        
+
+        let n_steps = p.steps.len();
+        let mut childs: Vec<Child> = Vec::new();
+        let mut statuses: Vec<i32> = vec![0; n_steps];
 
         #[cfg(debug_assertions)]
         {
-            println!("hello");
-            return 0;
+            // for i in 0..n_steps {
+            //     if !p.subshell_comm[i].is_empty() {
+            //         println!("Found subshell in part {}: ", i);
+            //         for (key, val) in &p.subshell_comm[i] {
+            //             print!("    {}: [", key);
+            //             for (s, e) in val {
+            //                 println!("{{{}, {}}}, ", *s, *e);
+            //             }
+            //             println!("]")
+            //         }
+            //     }
+            // }
+            println!("n_steps = {}", n_steps);
+            println!("command types: {:?}", p.types);
+            for i in 0..n_steps {
+                println!(
+                    "step: {}: {:?}; ioe descriptors: {:?}",
+                    i, p.steps[i], p.ioe_descriptors[i],
+                );
+            }
+        }
+        // run all external first to make sure that write to pipe from internal later is not blocking execution
+        for step_i in 0..n_steps {
+            if p.types[step_i] == CommandType::External {
+                let command = &mut p.steps[step_i];
+                let mut background = false;
+                if command.last().unwrap() == "&" {
+                    background = true;
+                    command.pop();
+                }
+                // TODO: Add subshell processing
+                let mut found_binary = false;
+                for &subpath in &path {
+                    let bin_path = String::from(subpath) + "/" + &command[0];
+                    if Path::new(&bin_path).exists() {
+                        found_binary = true;
+                        // let child_handler = Command::new(&bin_path).args(&command[1..]);
+                        // if p.ioe_descriptors[step_i][0] != STDIN_FILENO {
+                        //     let child_handler = child_handler
+                        //         .stdin(Stdio::from_raw_fd(p.ioe_descriptors[step_i][0]));
+                        // }
+                        let descs = &p.ioe_descriptors[step_i];
+                        let (in_, out_, err_) = unsafe {
+                            (
+                                if descs[0] != STDIN_FILENO {
+                                    Stdio::from_raw_fd(descs[0])
+                                } else {
+                                    Stdio::inherit()
+                                },
+                                if descs[1] != STDOUT_FILENO {
+                                    Stdio::from_raw_fd(descs[1])
+                                } else {
+                                    Stdio::inherit()
+                                },
+                                if descs[2] != STDERR_FILENO {
+                                    Stdio::from_raw_fd(descs[2])
+                                } else {
+                                    Stdio::inherit()
+                                },
+                            )
+                        };
+                        let child = match Command::new(bin_path)
+                            .args(&command[1..])
+                            .stdin(in_)
+                            .stdout(out_)
+                            .stderr(err_)
+                            .spawn()
+                        {
+                            Ok(c) => c,
+                            Err(err) => {
+                                eprintln!("myshell: {}", err.to_string());
+                                process::exit(1);
+                            }
+                        };
+                        if !background {
+                            childs.push(child);
+                        }
+
+                        break;
+                    }
+                }
+                if !found_binary {
+                    eprintln!("myshell: command not found: {}", &command[0]);
+                    statuses[step_i] = 127;
+                }
+            }
+        }
+        // now run all internal
+        for step_i in 0..n_steps {
+            let command = &mut p.steps[step_i];
+            // TODO: subshell
+            if p.types[step_i] == CommandType::Internal {
+                if command.last().unwrap() == "&" {
+                    command.pop();
+                }
+                let status = self.internal_cmds.get(command[0].as_str()).unwrap()(
+                    command,
+                    p.ioe_descriptors[step_i],
+                );
+                statuses[step_i] = status;
+            } else if p.types[step_i] == CommandType::LocalVar {
+                let status = self.set_local_variable(command, p.ioe_descriptors[step_i]);
+                statuses[step_i] = status;
+            }
+        }
+        // close all others descriptors
+        // for step_i in 0..n_steps {
+        //     for desc in &p.ioe_descriptors[step_i] {
+        //         if !vec![0, 1, 2].contains(desc) {
+        //             unsafe {
+        //                 if close(*desc) == -1 {
+        //                     eprintln!(
+        //                         "file descriptor {} close was unsuccsessful: errno: {}",
+        //                         *desc,
+        //                         errno()
+        //                     );
+        //                     process::exit(1);
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+        for mut child in childs {
+            child.wait().expect("Could not wait for child");
+        }
+
+        // check if everybody  finished successfully
+        for step_i in 0..n_steps {
+            if statuses[step_i] != 0 {
+                return statuses[step_i];
+            }
         }
         return 0;
     }
