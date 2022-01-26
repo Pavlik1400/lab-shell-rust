@@ -1,7 +1,9 @@
 extern crate libc;
 extern crate nix;
-
 extern crate argparse;
+#[macro_use]
+extern crate lazy_static;
+
 use argparse::{ArgumentParser, Store, StoreTrue};
 use std::process;
 use lab3_myshell::myshell;

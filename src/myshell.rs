@@ -1,16 +1,31 @@
 mod preprocessing;
 
+use lazy_static::lazy_static;
+use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::libc::strerror;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::env;
 use std::{collections::HashMap, process};
 
+lazy_static! {
+    pub static ref REDIRECTION_KEYS: Vec<&'static str> = vec!["2>", "&>", ">&", "<", ">"];
+    pub static ref REDIRECTIONS: HashMap<&'static str, Vec<i32>> = {
+        let mut m = HashMap::new();
+        m.insert(">", vec![STDOUT_FILENO]);
+        m.insert("2>", vec![STDERR_FILENO]);
+        m.insert("&>", vec![STDOUT_FILENO, STDERR_FILENO]);
+        m.insert("<", vec![STDIN_FILENO]);
+        m.insert(">&", vec![STDOUT_FILENO, STDERR_FILENO]);
+        m
+    };
+}
+
 #[derive(Clone)]
 enum CommandType {
     Internal,
     External,
-    LocalVar
+    LocalVar,
 }
 
 pub struct MyShell {
@@ -22,11 +37,11 @@ pub struct MyShell {
     special_symbols: Vec<char>,
 }
 
-pub struct pipeline<'a> {
-    steps: Vec<Vec<&'a str>>,
-    ioe_descriptors: Vec<(i32, i32, i32)>,
+pub struct Pipeline {
+    steps: Vec<Vec<String>>,
+    ioe_descriptors: Vec<[i32; 3]>,
     types: Vec<CommandType>,
-    subshell_comm: Vec<HashMap<usize, Vec<(usize, usize)>>>
+    subshell_comm: Vec<HashMap<usize, Vec<(usize, usize)>>>,
 }
 
 impl MyShell {
@@ -144,7 +159,7 @@ impl MyShell {
         let line = match MyShell::split_command(line) {
             Ok(splitted) => splitted,
             Err(err) => {
-                eprintln!("myshell: Error: {}", err);
+                eprintln!("myshell: {}", err);
                 return 1;
             }
         };
@@ -154,20 +169,49 @@ impl MyShell {
             Ok(l) => l,
             Err(err) => {
                 let err: i32 = err.parse().unwrap();
-                unsafe {eprintln!("myshell: Error: {:?}", strerror(err));}
+                unsafe {
+                    eprintln!("myshell: {:?}", strerror(err));
+                }
                 return 1;
             }
         };
-        
+
         let line = match MyShell::preprocess_subshells(line) {
             Ok(l) => l,
             Err(err) => {
-                eprint!("myshell: Error: {}", err);
+                eprint!("myshell: {}", err);
                 return 1;
             }
         };
 
+        let mut line = match MyShell::preprocess_redirections(line) {
+            Ok(l) => l,
+            Err(err) => {
+                eprintln!("myshell: {}", err);
+                return 1;
+            }
+        };
+        for step in &line.steps {
+            if step.is_empty() {
+                eprintln!("myshell: syntax error");
+                return 1;
+            }
+        }
 
+        for i in 0..line.steps.len() {
+            line.steps[i] =
+                match MyShell::insert_myshell(MyShell::expand_globs(Ok(line.steps[i].clone()))) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        eprintln!("myshell: {}", err);
+                        return 1;
+                    }
+                }
+        }
+        return 0;
+    }
+
+    pub fn execute_pipeline(mut p: Pipeline) -> i32 {
         return 0;
     }
 }
