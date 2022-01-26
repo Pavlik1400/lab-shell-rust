@@ -1,9 +1,9 @@
 mod mcommands;
 mod preprocessing;
+mod utils;
 
 use lazy_static::lazy_static;
-use nix::errno::errno;
-use nix::libc::{close, strerror, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+use nix::libc::{strerror, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::env;
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::{collections::HashMap, process};
 
-type McommandT = dyn Fn(&Vec<String>, [i32; 3]) -> i32;
+type McommandT = dyn Fn(&MyShell, &Vec<String>, [i32; 3]) -> i32;
 lazy_static! {
     pub static ref REDIRECTION_KEYS: Vec<&'static str> = vec!["2>", "&>", ">&", "<", ">"];
     pub static ref REDIRECTIONS: HashMap<&'static str, Vec<i32>> = {
@@ -339,32 +339,17 @@ impl MyShell {
                     command.pop();
                 }
                 let status = self.internal_cmds.get(command[0].as_str()).unwrap()(
+                    self,
                     command,
                     p.ioe_descriptors[step_i],
                 );
+                eprintln!("Hello");
                 statuses[step_i] = status;
             } else if p.types[step_i] == CommandType::LocalVar {
                 let status = self.set_local_variable(command, p.ioe_descriptors[step_i]);
                 statuses[step_i] = status;
             }
         }
-        // close all others descriptors
-        // for step_i in 0..n_steps {
-        //     for desc in &p.ioe_descriptors[step_i] {
-        //         if !vec![0, 1, 2].contains(desc) {
-        //             unsafe {
-        //                 if close(*desc) == -1 {
-        //                     eprintln!(
-        //                         "file descriptor {} close was unsuccsessful: errno: {}",
-        //                         *desc,
-        //                         errno()
-        //                     );
-        //                     process::exit(1);
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
 
         for mut child in childs {
             child.wait().expect("Could not wait for child");
