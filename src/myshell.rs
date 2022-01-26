@@ -146,11 +146,8 @@ impl MyShell {
     }
 
     fn interpret_line(&self, line: &mut str) -> i32 {
-        println!("Before everything:            {:?}", line);
         let line = MyShell::preprocess_comments(line);
-        println!("After comments preprocessing: {:?}", line);
         let line = line.trim();
-        println!("After trim:                   {:?}", line);
 
         if line.is_empty() {
             return 0;
@@ -163,7 +160,6 @@ impl MyShell {
                 return 1;
             }
         };
-        println!("After split:                  {:?}", line);
 
         let line = match MyShell::preprocess_pipeline(line) {
             Ok(l) => l,
@@ -208,10 +204,26 @@ impl MyShell {
                     }
                 }
         }
-        return 0;
+        self.execute_pipeline(line)
     }
 
-    pub fn execute_pipeline(mut p: Pipeline) -> i32 {
+    pub fn execute_pipeline(&self, mut p: Pipeline) -> i32 {
+        let path = match env::var("PATH") {
+            Ok(val) => val,
+            Err(err) => {
+                eprintln!("myshell: {}", err.to_string());
+                return 1;
+            }
+        };
+        let path: Vec<&str> = path.split(":").collect();
+        path.push("");
+        
+
+        #[cfg(debug_assertions)]
+        {
+            println!("hello");
+            return 0;
+        }
         return 0;
     }
 }
