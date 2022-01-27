@@ -240,7 +240,7 @@ impl MyShell {
     pub fn mark_command_types(&self, mut p: Pipeline) -> Pipeline {
         for i in 0..p.steps.len() {
             let command = &p.steps[i];
-            p.types[i] = if self.internal_cmds.contains_key(command[0].as_str()) {
+            p.types[i] = if self.internal_cmds.contains(&command[0].as_str()) {
                 CommandType::Internal
             } else if command.len() == 1 && command[0].contains('=') {
                 CommandType::LocalVar

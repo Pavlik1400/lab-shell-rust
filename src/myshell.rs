@@ -7,12 +7,12 @@ use nix::libc::{strerror, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::env;
+use std::fs::File;
 use std::os::unix::prelude::FromRawFd;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::{collections::HashMap, process};
 
-type McommandT = dyn Fn(&MyShell, &Vec<String>, [i32; 3]) -> i32;
 lazy_static! {
     pub static ref REDIRECTION_KEYS: Vec<&'static str> = vec!["2>", "&>", ">&", "<", ">"];
     pub static ref REDIRECTIONS: HashMap<&'static str, Vec<i32>> = {
@@ -40,7 +40,7 @@ pub struct MyShell {
     pub exec_path: String,
     pub last_exit_code: i32,
     special_symbols: Vec<char>,
-    internal_cmds: HashMap<&'static str, Box<McommandT>>,
+    internal_cmds: Vec<&'static str>,
 }
 
 pub struct Pipeline {
@@ -70,16 +70,9 @@ impl MyShell {
         let last_exit_code = 0;
         let special_symbols = vec!['$', ' ', '\'', '"'];
 
-        let mut internal_cmds: HashMap<&'static str, Box<McommandT>> = HashMap::new();
-        internal_cmds.insert("merrno", Box::new(MyShell::merrno));
-        internal_cmds.insert("mpwd", Box::new(MyShell::mpwd));
-        internal_cmds.insert("mcd", Box::new(MyShell::mcd));
-        internal_cmds.insert(".", Box::new(MyShell::execute_script));
-        internal_cmds.insert("mecho", Box::new(MyShell::mecho));
-        internal_cmds.insert("mexport", Box::new(MyShell::mexport));
-        internal_cmds.insert("alias", Box::new(MyShell::alias));
-        internal_cmds.insert("mexit", Box::new(MyShell::mexit));
-
+        let mut internal_cmds: Vec<&'static str> = vec![
+            "merrno", "mpwd", "mcd", ".", "mecho", "mexport", "alias", "mexit",
+        ];
         // add exec_path to path if needed
         match env::var("PATH") {
             Ok(val) => {
@@ -91,7 +84,6 @@ impl MyShell {
                 process::exit(1);
             }
         }
-
         MyShell {
             time_to_exit,
             aliases,
@@ -162,7 +154,7 @@ impl MyShell {
         self.last_exit_code
     }
 
-    fn interpret_line(&self, line: &mut str) -> i32 {
+    fn interpret_line(&mut self, line: &mut str) -> i32 {
         let line = MyShell::preprocess_comments(line);
         let line = line.trim();
 
@@ -226,7 +218,7 @@ impl MyShell {
         self.execute_pipeline(line)
     }
 
-    pub fn execute_pipeline(&self, mut p: Pipeline) -> i32 {
+    pub fn execute_pipeline(&mut self, mut p: Pipeline) -> i32 {
         let path = match env::var("PATH") {
             Ok(val) => val,
             Err(err) => {
@@ -279,11 +271,6 @@ impl MyShell {
                     let bin_path = String::from(subpath) + "/" + &command[0];
                     if Path::new(&bin_path).exists() {
                         found_binary = true;
-                        // let child_handler = Command::new(&bin_path).args(&command[1..]);
-                        // if p.ioe_descriptors[step_i][0] != STDIN_FILENO {
-                        //     let child_handler = child_handler
-                        //         .stdin(Stdio::from_raw_fd(p.ioe_descriptors[step_i][0]));
-                        // }
                         let descs = &p.ioe_descriptors[step_i];
                         let (in_, out_, err_) = unsafe {
                             (
@@ -338,12 +325,7 @@ impl MyShell {
                 if command.last().unwrap() == "&" {
                     command.pop();
                 }
-                let status = self.internal_cmds.get(command[0].as_str()).unwrap()(
-                    self,
-                    command,
-                    p.ioe_descriptors[step_i],
-                );
-                eprintln!("Hello");
+                let status = self.call_mcommand(command, p.ioe_descriptors[step_i]);
                 statuses[step_i] = status;
             } else if p.types[step_i] == CommandType::LocalVar {
                 let status = self.set_local_variable(command, p.ioe_descriptors[step_i]);
