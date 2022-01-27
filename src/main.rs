@@ -6,8 +6,7 @@ extern crate lazy_static;
 
 use argparse::{ArgumentParser, Store, StoreTrue};
 use std::process;
-use lab3_myshell::myshell;
-use myshell::MyShell;
+use myshell::myshell::MyShell;
 
 fn main() {
     let mut version = false;

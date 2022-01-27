@@ -1,0 +1,7 @@
+#!target/release/myshell
+mecho "hello"
+ls
+mcd ..
+mpwd
+mexit 1
+echo "hello"

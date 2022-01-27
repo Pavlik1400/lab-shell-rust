@@ -70,7 +70,7 @@ impl MyShell {
         let last_exit_code = 0;
         let special_symbols = vec!['$', ' ', '\'', '"'];
 
-        let mut internal_cmds: Vec<&'static str> = vec![
+        let internal_cmds: Vec<&'static str> = vec![
             "merrno", "mpwd", "mcd", ".", "mecho", "mexport", "alias", "mexit",
         ];
         // add exec_path to path if needed
@@ -111,7 +111,7 @@ impl MyShell {
                 process::exit(1);
             });
         }
-        loop {
+        while !self.time_to_exit {
             // pwd
             let curdir = env::current_dir()
                 .unwrap_or_else(|err| {
