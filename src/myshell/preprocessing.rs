@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::collections::btree_map::ValuesMut;
+use std::env;
 
-use super::{CommandType, MyShell, Pipeline, REDIRECTIONS, REDIRECTION_KEYS};
+use super::{CommandType, MyShell, Pipeline, REDIRECTIONS, REDIRECTION_KEYS, SPECIAL_SYMBOLS};
 use crate::string_utils::{find_all_start_end_symb, find_all_subshells};
 
 use glob::glob;
@@ -16,7 +18,6 @@ impl MyShell {
             None => line,
         }
     }
-
     pub fn split_command(line: &str) -> Result<Vec<String>, &str> {
         let one_quote = find_all_start_end_symb(line, "'")?;
         let two_quote = find_all_start_end_symb(line, "\"")?;
@@ -50,7 +51,6 @@ impl MyShell {
         splitted.push(line[prev..].trim().to_string());
         Ok(splitted)
     }
-
     pub fn preprocess_pipeline(commands: Vec<String>) -> Result<Pipeline, String> {
         let n_steps = commands.iter().filter(|&command| *command == "|").count() + 1;
         if n_steps == 1 {
@@ -125,7 +125,6 @@ impl MyShell {
         }
         Ok(p)
     }
-
     pub fn preprocess_redirections(mut p: Pipeline) -> Result<Pipeline, String> {
         for step_i in 0..p.steps.len() {
             let command = &mut p.steps[step_i];
@@ -186,12 +185,62 @@ impl MyShell {
 
         Ok(p)
     }
-
     pub fn substitute_vars_rem_parenth(
         &self,
         command: Result<Vec<String>, String>,
     ) -> Result<Vec<String>, String> {
-        unimplemented!(); // TODO: implement
+        let command = command?;
+        let mut result: Vec<String> = Vec::new();
+        let mut new_token: String = String::new();
+        let mut substitue: bool = true;
+        let mut from: usize;
+        let mut to: usize;
+
+        for token in &command {
+            new_token.clear();
+            let token_chars: Vec<char> = token.chars().collect();
+
+            let mut i: usize = 0;
+            while i < token_chars.len() {
+                // escape symbol
+                if token_chars[i] == '\\' {
+                    if i != token.len() - 1 {
+                        new_token.push(token_chars[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                // dont substitue variables between '
+                } else if token_chars[i] == '\'' {
+                    substitue = !substitue;
+                // variables substitution
+                } else if token_chars[i] == '$'
+                    && substitue
+                    && (i != token_chars.len() - 1 && token_chars[i + 1] != '(')
+                {
+                    from = i;
+                    to = token_chars.len();
+                    for &s in SPECIAL_SYMBOLS.iter() {
+                        if let Some(val) = token[from+1..].find(s) {
+                            to = val;
+                        }
+                    } 
+                    let varname = &token[from+1..to];
+                    if self.local_vars.contains_key(varname) {
+                        new_token += self.local_vars.get(varname).unwrap();
+                    } else if !env::var(varname).is_err() {
+                        new_token += &env::var(varname).unwrap();
+                    }
+                    i += varname.len();
+                } else if token_chars[i] != '"' {
+                    new_token.push(token_chars[i]);
+                }
+                i += 1;
+            }
+            result.push(new_token.clone());
+        }
+
+        Ok(result)
     }
 
     pub fn expand_globs(command: Result<Vec<String>, String>) -> Result<Vec<String>, String> {
@@ -251,39 +300,4 @@ impl MyShell {
         p
     }
 
-    // pub fn substitute_vars_rem_parenth(command: Vec<&str>) -> Vec<&str> {
-    //     let result: Vec<&str> = Vec::new();
-    //     let mut new_token: String = String::new();
-    //     let mut substitue: bool = true;
-    //     let mut from: usize;
-    //     let mut to: usize;
-
-    //     for &token in &command {
-    //         new_token.clear();
-    //         let token_chars: Vec<char> = token.chars().collect();
-
-    //         let mut i: usize = 0;
-    //         while i < token_chars.len() {
-    //             // escape symbol
-    //             if token_chars[i] == '\\' {
-    //                 if i != token.len() - 1 {
-    //                     new_token.push(token_chars[i+1]);
-    //                     i += 2;
-    //                     continue;
-    //                 }
-    //             // dont substitue variables between '
-    //             } else if token_chars[i] == '\'' {
-    //                 substitue = !substitue;
-    //             // variables substitution
-    //             } else if token_chars[i] == '$' && substitue && (i != token_chars.len()-1 && token_chars[i+1] == '(') {
-    //                 from = i;
-    //                 to = token_chars.len();
-
-    //             }
-    //         }
-
-    //     }
-
-    //     result
-    // }
 }

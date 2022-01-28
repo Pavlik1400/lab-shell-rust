@@ -178,12 +178,16 @@ impl MyShell {
         self.time_to_exit = true;
         return status;
     }
-
     pub fn set_local_variable(&mut self, command: &Vec<String>, ioe_descs: [i32; 3]) -> i32 {
-        println!("Set local variable called!");
+        let (_, fout, ferr) = unsafe { MyShell::ioe_descriptors_to_files(&ioe_descs) };
+        let splitted: Vec<&str> = command[0].split("=").collect();
+        if splitted.len() != 2 {
+            MyShell::writex(&fout, "myshell: syntax error\n");
+            return 1;
+        }
+        self.local_vars.insert(splitted[0].to_string(), splitted[1].to_string());
         return 0;
     }
-
     pub fn call_mcommand(&mut self, command: &Vec<String>, ioe_descs: [i32; 3]) -> i32 {
         // TODO:: look awful
         if command[0] == "merrno" {

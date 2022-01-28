@@ -24,6 +24,7 @@ lazy_static! {
         m.insert(">&", vec![STDOUT_FILENO, STDERR_FILENO]);
         m
     };
+    pub static ref SPECIAL_SYMBOLS: Vec<char> = vec!['$', ' ', '\'', '"'];
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,7 +40,6 @@ pub struct MyShell {
     local_vars: HashMap<String, String>,
     pub exec_path: String,
     pub last_exit_code: i32,
-    special_symbols: Vec<char>,
     internal_cmds: Vec<&'static str>,
 }
 
@@ -68,7 +68,6 @@ impl MyShell {
             .into_string()
             .unwrap();
         let last_exit_code = 0;
-        let special_symbols = vec!['$', ' ', '\'', '"'];
 
         let internal_cmds: Vec<&'static str> = vec![
             "merrno", "mpwd", "mcd", ".", "mecho", "mexport", "alias", "mexit",
@@ -90,7 +89,6 @@ impl MyShell {
             local_vars,
             exec_path,
             last_exit_code,
-            special_symbols,
             internal_cmds,
         }
     }
@@ -205,14 +203,15 @@ impl MyShell {
 
         for i in 0..line.steps.len() {
             // TODO: add variable substitution & subshell search
-            line.steps[i] =
-                match MyShell::insert_myshell(MyShell::expand_globs(Ok(line.steps[i].clone()))) {
-                    Ok(val) => val,
-                    Err(err) => {
-                        eprintln!("myshell: {}", err);
-                        return 1;
-                    }
+            line.steps[i] = match MyShell::insert_myshell(MyShell::expand_globs(
+                self.substitute_vars_rem_parenth(Ok(line.steps[i].clone())),
+            )) {
+                Ok(val) => val,
+                Err(err) => {
+                    eprintln!("myshell: {}", err);
+                    return 1;
                 }
+            }
         }
         let line = self.mark_command_types(line);
         self.execute_pipeline(line)
