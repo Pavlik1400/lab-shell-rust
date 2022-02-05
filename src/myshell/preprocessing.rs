@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::btree_map::ValuesMut;
 use std::env;
 
 use super::{CommandType, MyShell, Pipeline, REDIRECTIONS, REDIRECTION_KEYS, SPECIAL_SYMBOLS};
@@ -18,7 +17,7 @@ impl MyShell {
             None => line,
         }
     }
-    pub fn split_command(line: &str) -> Result<Vec<String>, &str> {
+    pub fn split_command(line: &str) -> Result<Vec<String>, String> {
         let one_quote = find_all_start_end_symb(line, "'")?;
         let two_quote = find_all_start_end_symb(line, "\"")?;
         let subshells = find_all_subshells(line)?;
@@ -279,12 +278,12 @@ impl MyShell {
         Ok(command)
     }
 
-    pub fn substitute_aliases(
-        &self,
-        command: Result<Vec<String>, String>,
-    ) -> Result<Vec<String>, String> {
-        unimplemented!(); // TODO: implement
-    }
+    // pub fn substitute_aliases(
+    //     &self,
+    //     command: Result<Vec<String>, String>,
+    // ) -> Result<Vec<String>, String> {
+    //     unimplemented!(); // TODO: implement
+    // }
 
     pub fn mark_command_types(&self, mut p: Pipeline) -> Pipeline {
         for i in 0..p.steps.len() {

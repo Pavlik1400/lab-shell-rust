@@ -1,7 +1,7 @@
-pub fn find_all_start_end_symb<'a>(
+pub fn find_all_start_end_symb(
     string: &str,
     symb: &str,
-) -> Result<Vec<(usize, usize)>, &'a str> {
+) -> Result<Vec<(usize, usize)>, String> {
     let mut result: Vec<(usize, usize)> = Vec::new();
     let mut start_i: usize;
     let mut end_i: usize;
@@ -14,7 +14,7 @@ pub fn find_all_start_end_symb<'a>(
     loop {
         end_i = match string[start_i + 1..].find(symb) {
             Some(idx) => start_i + 1 + idx,
-            None => return Err("myshell: parse error"),
+            None => return Err("myshell: parse error".to_string()),
         };
         result.push((start_i, end_i));
         start_i = match string[end_i + 1..].find(symb) {
@@ -26,7 +26,7 @@ pub fn find_all_start_end_symb<'a>(
     Ok(result)
 }
 
-pub fn find_all_subshells<'a>(line: &str) -> Result<Vec<(usize, usize)>, &'a str> {
+pub fn find_all_subshells<'a>(line: &str) -> Result<Vec<(usize, usize)>, String> {
     let mut result: Vec<(usize, usize)> = Vec::new();
     let mut depth: usize = 0;
     let mut start: usize = 0;
@@ -49,7 +49,7 @@ pub fn find_all_subshells<'a>(line: &str) -> Result<Vec<(usize, usize)>, &'a str
     }
     // not closed $()
     if depth > 0 {
-        return Err("myshell: parse error");
+        return Err("myshell: parse error".to_string());
     }
 
     Ok(result)

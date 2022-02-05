@@ -1,17 +1,19 @@
 mod mcommands;
 mod preprocessing;
 mod utils;
+mod server;
 
 use lazy_static::lazy_static;
 use nix::libc::{strerror, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::env;
-use std::fs::File;
 use std::os::unix::prelude::FromRawFd;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::{collections::HashMap, process};
+
+use self::utils::result_pathbuf_to_string;
 
 lazy_static! {
     pub static ref REDIRECTION_KEYS: Vec<&'static str> = vec!["2>", "&>", ">&", "<", ">"];
@@ -36,7 +38,7 @@ enum CommandType {
 
 pub struct MyShell {
     time_to_exit: bool,
-    aliases: HashMap<String, String>,
+    // aliases: HashMap<String, String>,
     local_vars: HashMap<String, String>,
     pub exec_path: String,
     pub last_exit_code: i32,
@@ -53,26 +55,17 @@ pub struct Pipeline {
 impl MyShell {
     pub fn new() -> MyShell {
         let time_to_exit = false;
-        let aliases = HashMap::new();
+        // let aliases = HashMap::new();
         let local_vars = HashMap::new();
-
-        let exec_path = std::env::current_exe()
-            .unwrap_or_else(|error| {
-                eprintln!(
-                    "myshell: Error: could not determine path to the executable: {}",
-                    error
-                );
-                process::exit(1);
-            })
-            .into_os_string()
-            .into_string()
-            .unwrap();
+        let exec_path = result_pathbuf_to_string(env::current_exe());
         let last_exit_code = 0;
-
         let internal_cmds: Vec<&'static str> = vec![
             "merrno", "mpwd", "mcd", ".", "mecho", "mexport", "alias", "mexit",
         ];
-        // add exec_path to path if needed
+        // dirname()
+        let exec_path: Vec<&str> = exec_path.split("/").collect();
+        let exec_path = exec_path[..exec_path.len()-1].join("/");
+        // add exec_path to path
         match env::var("PATH") {
             Ok(val) => {
                 let new_path = val + ":" + &exec_path;
@@ -85,7 +78,7 @@ impl MyShell {
         }
         MyShell {
             time_to_exit,
-            aliases,
+            // aliases,
             local_vars,
             exec_path,
             last_exit_code,
@@ -111,14 +104,7 @@ impl MyShell {
         }
         while !self.time_to_exit {
             // pwd
-            let curdir = env::current_dir()
-                .unwrap_or_else(|err| {
-                    println!("Error: could not read current directory: {}", err);
-                    process::exit(1);
-                })
-                .into_os_string()
-                .into_string()
-                .unwrap();
+            let curdir = result_pathbuf_to_string(env::current_dir());
 
             // read input
             let readline = rl.readline(&(curdir + " $ "));
@@ -131,12 +117,7 @@ impl MyShell {
                     }
                     self.last_exit_code = self.interpret_line(&mut line);
                 }
-                Err(ReadlineError::Interrupted) => {
-                    self.last_exit_code = 0;
-                    break;
-                }
-                Err(ReadlineError::Eof) => {
-                    self.last_exit_code = 0;
+                Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
                     break;
                 }
                 Err(err) => {
@@ -153,6 +134,7 @@ impl MyShell {
     }
 
     fn interpret_line(&mut self, line: &mut str) -> i32 {
+        // First step
         let line = MyShell::preprocess_comments(line);
         let line = line.trim();
 
@@ -160,52 +142,44 @@ impl MyShell {
             return 0;
         }
 
-        let line = match MyShell::split_command(line) {
-            Ok(splitted) => splitted,
-            Err(err) => {
-                eprintln!("myshell: {}", err);
-                return 1;
+        // Second step
+        let second_prep_step = |line: &str| -> Result<Pipeline, String> {
+            let line = MyShell::split_command(line)?;
+            let line = MyShell::preprocess_pipeline(line)?;
+            let line = MyShell::preprocess_subshells(line)?;
+            let line = MyShell::preprocess_redirections(line)?;
+            for step in &line.steps {
+                if step.is_empty() {
+                    return Err("myshell: syntax error".to_string());
+                }
             }
+            Ok(line)
         };
 
-        let line = match MyShell::preprocess_pipeline(line) {
+        let mut line = match second_prep_step(line) {
             Ok(l) => l,
             Err(err) => {
-                let err: i32 = err.parse().unwrap();
+                // if error is parsable string then it's an errno
+                let errno_: i32 = err.parse().unwrap_or_else(|_| {
+                    eprintln!("myshell: {}", err);
+                    return 1;
+                });
                 unsafe {
-                    eprintln!("myshell: {:?}", strerror(err));
+                    eprintln!("myshell: {:?}", strerror(errno_));
                 }
                 return 1;
             }
         };
-
-        let line = match MyShell::preprocess_subshells(line) {
-            Ok(l) => l,
-            Err(err) => {
-                eprint!("myshell: {}", err);
-                return 1;
-            }
-        };
-
-        let mut line = match MyShell::preprocess_redirections(line) {
-            Ok(l) => l,
-            Err(err) => {
-                eprintln!("myshell: {}", err);
-                return 1;
-            }
-        };
-        for step in &line.steps {
-            if step.is_empty() {
-                eprintln!("myshell: syntax error");
-                return 1;
-            }
-        }
-
+        
+        // Third step
         for i in 0..line.steps.len() {
             // TODO: add variable substitution & subshell search
-            line.steps[i] = match MyShell::insert_myshell(MyShell::expand_globs(
-                self.substitute_vars_rem_parenth(Ok(line.steps[i].clone())),
-            )) {
+            line.steps[i] = match MyShell::insert_myshell(
+                            MyShell::expand_globs(
+                                self.substitute_vars_rem_parenth(
+                                    Ok(line.steps[i].clone()
+                            )))) 
+            {
                 Ok(val) => val,
                 Err(err) => {
                     eprintln!("myshell: {}", err);
@@ -217,7 +191,7 @@ impl MyShell {
         self.execute_pipeline(line)
     }
 
-    pub fn execute_pipeline(&mut self, mut p: Pipeline) -> i32 {
+    fn execute_pipeline(&mut self, mut p: Pipeline) -> i32 {
         let path = match env::var("PATH") {
             Ok(val) => val,
             Err(err) => {
@@ -234,18 +208,6 @@ impl MyShell {
 
         #[cfg(debug_assertions)]
         {
-            // for i in 0..n_steps {
-            //     if !p.subshell_comm[i].is_empty() {
-            //         println!("Found subshell in part {}: ", i);
-            //         for (key, val) in &p.subshell_comm[i] {
-            //             print!("    {}: [", key);
-            //             for (s, e) in val {
-            //                 println!("{{{}, {}}}, ", *s, *e);
-            //             }
-            //             println!("]")
-            //         }
-            //     }
-            // }
             println!("n_steps = {}", n_steps);
             println!("command types: {:?}", p.types);
             for i in 0..n_steps {
@@ -343,5 +305,10 @@ impl MyShell {
             }
         }
         return 0;
+    }
+
+    pub fn run_script(&mut self, path: String) -> i32 {
+        let command = vec![String::from("."), path];
+        return self.execute_script(&command, [0, 1, 2]);
     }
 }
